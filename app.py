@@ -2,7 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 st.set_page_config(
-    page_title="Rock Paper Scissors Arena",
+    page_title="Rock Paper Scissors: Confusion Labs",
     page_icon="✊",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -154,6 +154,18 @@ GAME_HTML = """
       osc.start(now);
       osc.stop(now + 0.05);
 
+    } else if (type === 'tick') {
+      var tickOsc = audioCtx.createOscillator();
+      tickOsc.type = 'sine';
+      tickOsc.frequency.setValueAtTime(760, now);
+      var tickGain = audioCtx.createGain();
+      tickGain.gain.setValueAtTime(0.22, now);
+      tickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+      tickOsc.connect(tickGain);
+      tickGain.connect(audioCtx.destination);
+      tickOsc.start(now);
+      tickOsc.stop(now + 0.08);
+
     } else if (type === 'thud') {
       var tOsc = audioCtx.createOscillator();
       tOsc.type = 'triangle';
@@ -229,7 +241,7 @@ GAME_HTML = """
   // ---------------------------------------------------------------------
   var game = {
     state: 'loading',           // loading | menu | battle | victory | defeat
-    battlePhase: 'select',      // select | clash | result
+    battlePhase: 'confusion',   // confusion | clash | result
     difficulty: 'EASY',
     playerHP: 3,
     compHP: 3,
@@ -237,6 +249,18 @@ GAME_HTML = """
     playerWinMoves: [],
     selectedMove: null,
     compMove: null,
+
+    // confusion-loop state
+    confusionStart: 0,
+    confusionDuration: 3000,
+    playerTrail: [],
+    aiTrail: [],
+    switchCount: 0,
+    playerStress: 0,
+    aiStress: 0,
+    aiChaosFallback: false,
+    lastTickIndex: -1,
+
     clashStart: 0,
     clashDuration: 1500,
     resultStart: 0,
@@ -262,6 +286,7 @@ GAME_HTML = """
   var BEATS = { rock: 'scissors', scissors: 'paper', paper: 'rock' };
   var COUNTER = { scissors: 'rock', paper: 'scissors', rock: 'paper' };
   var LABELS = { rock: '✊ ROCK', paper: '✋ PAPER', scissors: '✌️ SCISSORS' };
+  var ICONS = { rock: '✊', paper: '✋', scissors: '✌️' };
 
   // Fraction of the clash duration spent on the 3-swing telegraph windup;
   // the remainder is the punch that carries the hands together to clash.
@@ -281,6 +306,12 @@ GAME_HTML = """
     return f;
   }
 
+  function trailFreq(trail){
+    var f = { rock: 0, paper: 0, scissors: 0 };
+    for (var i = 0; i < trail.length; i++) f[trail[i].move]++;
+    return f;
+  }
+
   function mostFrequent(freq){
     var best = null, bestCount = -1;
     var keys = ['rock', 'paper', 'scissors'];
@@ -293,6 +324,8 @@ GAME_HTML = """
     return best;
   }
 
+  // Cross-round base prediction — the same adaptive logic as before,
+  // seeded by the player's locked-in choices from previous rounds.
   function computerChoose(){
     if (game.difficulty === 'EASY') {
       return randomMove();
@@ -347,14 +380,90 @@ GAME_HTML = """
     game.playerFlashUntil = 0;
     game.compFlashUntil = 0;
     game.state = 'battle';
-    game.battlePhase = 'select';
     startBgMusic();
+    startConfusionPhase();
   }
 
-  function chooseMove(move){
-    game.selectedMove = move;
-    game.playerHistory.push(move);
-    game.compMove = computerChoose();
+  // ---------------------------------------------------------------------
+  // THE 3-SECOND PSYCHOLOGICAL CONFUSION LOOP
+  // ---------------------------------------------------------------------
+  function startConfusionPhase(){
+    game.battlePhase = 'confusion';
+    game.confusionStart = performance.now();
+    game.playerTrail = [];
+    game.aiTrail = [];
+    game.switchCount = 0;
+    game.playerStress = 0;
+    game.aiStress = 0;
+    game.aiChaosFallback = false;
+    game.lastTickIndex = -1;
+    game.hoverSlot = null;
+
+    // The AI's opening read, based on its cross-round adaptive model.
+    var base = computerChoose();
+    game.aiTrail.push({ move: base, t: performance.now() });
+  }
+
+  // Called every time the player taps a weapon during the confusion
+  // window. Updates both trails and both stress meters in real time.
+  function registerPlayerClick(move){
+    var prevMove = game.playerTrail.length
+      ? game.playerTrail[game.playerTrail.length - 1].move
+      : null;
+
+    game.playerTrail.push({ move: move, t: performance.now() });
+    if (prevMove && prevMove !== move) {
+      game.switchCount += 1;
+    }
+
+    // Player stress climbs the more erratically they flip between moves.
+    game.playerStress = clamp(game.switchCount / 5, 0, 1);
+
+    // AI stress model depends on difficulty.
+    if (game.difficulty === 'EASY') {
+      game.aiStress = 0;
+    } else if (game.difficulty === 'MEDIUM') {
+      game.aiStress = game.switchCount >= 2
+        ? clamp(0.35 + (game.switchCount - 2) * 0.15, 0, 1)
+        : clamp(game.switchCount * 0.1, 0, 1);
+    } else if (game.difficulty === 'HARD') {
+      game.aiStress = clamp(game.switchCount / 4, 0, 1);
+      if (game.aiStress >= 1) {
+        game.aiChaosFallback = true;
+      }
+    }
+
+    // Recompute the AI's live leaning move from the trail read so far.
+    var currentMove;
+    if (game.aiChaosFallback) {
+      currentMove = randomMove();
+    } else {
+      var predicted = mostFrequent(trailFreq(game.playerTrail));
+      currentMove = COUNTER[predicted];
+    }
+    game.aiTrail.push({ move: currentMove, t: performance.now() });
+
+    sound('snap');
+  }
+
+  // Fires the exact millisecond the countdown hits zero: locks in the
+  // last move the player touched and the AI's final read, then clears
+  // the trails and kicks off the clash animation.
+  function lockInChoice(){
+    var finalPlayerMove = game.playerTrail.length
+      ? game.playerTrail[game.playerTrail.length - 1].move
+      : (game.hoverSlot || randomMove());
+    var finalCompMove = game.aiTrail.length
+      ? game.aiTrail[game.aiTrail.length - 1].move
+      : randomMove();
+
+    game.selectedMove = finalPlayerMove;
+    game.playerHistory.push(finalPlayerMove);
+    game.compMove = finalCompMove;
+
+    game.playerTrail = [];
+    game.aiTrail = [];
+
     game.battlePhase = 'clash';
     game.clashStart = performance.now();
     game.impactTriggered = false;
@@ -365,7 +474,7 @@ GAME_HTML = """
     game.paused = false;
     game.pauseStartTime = 0;
     game.state = 'menu';
-    game.battlePhase = 'select';
+    game.battlePhase = 'confusion';
   }
 
   function goToLoading(){
@@ -373,7 +482,7 @@ GAME_HTML = """
     game.paused = false;
     game.pauseStartTime = 0;
     game.state = 'loading';
-    game.battlePhase = 'select';
+    game.battlePhase = 'confusion';
   }
 
   function togglePause(){
@@ -384,6 +493,7 @@ GAME_HTML = """
       var delta = performance.now() - game.pauseStartTime;
       game.clashStart += delta;
       game.resultStart += delta;
+      game.confusionStart += delta;
       if (game.playerFlashUntil > 0) game.playerFlashUntil += delta;
       if (game.compFlashUntil > 0) game.compFlashUntil += delta;
       game.paused = false;
@@ -662,13 +772,17 @@ GAME_HTML = """
 
     ctx.textAlign = 'center';
     ctx.fillStyle = '#dc2626';
-    var titleSize = Math.max(24, Math.min(W * 0.075, H * 0.09));
+    var titleSize = Math.max(20, Math.min(W * 0.062, H * 0.075));
     ctx.font = '900 ' + titleSize + 'px "Arial Black", Arial, sans-serif';
-    ctx.fillText('ROCK PAPER SCISSORS', W / 2, H * 0.16);
+    ctx.fillText('ROCK PAPER SCISSORS', W / 2, H * 0.13);
+    var subSize = Math.max(14, Math.min(W * 0.038, H * 0.05));
+    ctx.font = '900 ' + subSize + 'px "Arial Black", Arial, sans-serif';
+    ctx.fillStyle = '#111111';
+    ctx.fillText('CONFUSION LABS', W / 2, H * 0.13 + subSize * 1.15);
 
     var handSize = Math.min(W, H) * 0.24;
-    drawFistHand(ctx, W * 0.32, H * 0.48, handSize, false, false);
-    drawScissorsHandShape(ctx, W * 0.68, H * 0.48, handSize, true, false);
+    drawFistHand(ctx, W * 0.32, H * 0.50, handSize, false, false);
+    drawScissorsHandShape(ctx, W * 0.68, H * 0.50, handSize, true, false);
 
     var alpha = (Math.sin(t / 400) + 1) / 2;
     ctx.fillStyle = 'rgba(0,0,0,' + alpha.toFixed(3) + ')';
@@ -714,29 +828,31 @@ GAME_HTML = """
     }
 
     var descs = {
-      EASY: 'Computer picks completely at random.',
-      MEDIUM: 'Computer tracks your last 6 moves and throws the counter to your most frequent one.',
-      HARD: 'Computer studies the move you use most often when YOU win, and targets that bias.'
+      EASY: 'Computer picks completely at random. Its stress stays calm no matter how you spam.',
+      MEDIUM: 'Computer reads your live click trail and drifts toward stress if you switch moves twice.',
+      HARD: 'Computer studies your trail closely — but an erratic spam pattern can overwhelm it into a random panic pick.'
     };
     ctx.fillStyle = '#555555';
-    ctx.font = '500 ' + Math.max(12, W * 0.017) + 'px Arial, sans-serif';
+    ctx.font = '500 ' + Math.max(12, W * 0.016) + 'px Arial, sans-serif';
     ctx.fillText(descs[game.difficulty], W / 2, y + btnH + H * 0.05);
 
-    var eW = Math.min(340, W * 0.42);
-    var eH = Math.max(58, H * 0.09);
+    var eW = Math.min(300, W * 0.38);
+    var eH = Math.max(60, H * 0.095);
     var ex = W / 2 - eW / 2;
     var ey = H * 0.58;
     ctx.save();
-    setUIShadow(ctx);
-    ctx.fillStyle = '#dc2626';
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 16;
+    ctx.shadowOffsetY = 9;
+    ctx.fillStyle = '#111111';
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 4;
     roundRectPath(ctx, ex, ey, eW, eH, 14);
     ctx.fill(); ctx.stroke();
     ctx.restore();
     ctx.fillStyle = '#ffffff';
-    ctx.font = '900 ' + Math.max(17, eW * 0.088) + 'px Arial, sans-serif';
-    ctx.fillText('ENTER THE ARENA 🔥', ex + eW / 2, ey + eH / 2);
+    ctx.font = '900 ' + Math.max(19, eW * 0.11) + 'px Arial, sans-serif';
+    ctx.fillText('START', ex + eW / 2, ey + eH / 2);
     game.enterButton = { x: ex, y: ey, w: eW, h: eH };
   }
 
@@ -832,10 +948,75 @@ GAME_HTML = """
 
   function moveLabel(m){ return LABELS[m]; }
 
-  // The telegraph swing: both hands hold position and bob up/down together
-  // through 3 full cycles. During this window the computer's hand carries a
-  // subtle move-specific "tell" — a sharp reader can learn to recognize it.
-  // Afterward both hands punch inward to the center and collide.
+  // Horizontal row of small hand-icon glyphs tracing every click made
+  // during the confusion window. Grows outward from the given anchor.
+  function drawTrail(trail, anchorX, y, align){
+    var iconSize = Math.max(14, W * 0.024);
+    var gap = iconSize * 1.05;
+    var recent = trail.slice(-12);
+    ctx.textAlign = 'center';
+    ctx.font = iconSize + 'px Arial, sans-serif';
+    for (var i = 0; i < recent.length; i++) {
+      var cx = align === 'left' ? anchorX + i * gap : anchorX - i * gap;
+      var fade = 0.35 + 0.65 * ((i + 1) / recent.length);
+      ctx.fillStyle = 'rgba(17,17,17,' + fade.toFixed(2) + ')';
+      ctx.fillText(ICONS[recent[i].move], cx, y);
+    }
+  }
+
+  // Vertical stress meter: green at the floor, dark red at the ceiling.
+  function drawStressBar(x, y, w, h, value, label, align){
+    var v = clamp(value, 0, 1);
+
+    ctx.textAlign = align === 'left' ? 'left' : 'right';
+    ctx.fillStyle = '#555555';
+    ctx.font = '700 ' + Math.max(10, w * 0.6) + 'px Arial, sans-serif';
+    ctx.fillText(label, align === 'left' ? x : x + w, y - 6);
+
+    ctx.save();
+    ctx.fillStyle = '#f2f2f2';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x, y, w, h);
+
+    var grad = ctx.createLinearGradient(0, y + h, 0, y);
+    grad.addColorStop(0, '#16a34a');
+    grad.addColorStop(0.55, '#eab308');
+    grad.addColorStop(1, '#7f1d1d');
+
+    var fillH = h * v;
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y + h - fillH, w, fillH);
+    ctx.strokeRect(x, y, w, h);
+    ctx.restore();
+  }
+
+  function drawConfusionPhase(t){
+    var elapsed = clamp(t - game.confusionStart, 0, game.confusionDuration);
+    var remaining = (game.confusionDuration - elapsed) / 1000;
+
+    drawTrail(game.playerTrail, W * 0.06, H * 0.24, 'left');
+    drawTrail(game.aiTrail, W * 0.94, H * 0.24, 'right');
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = remaining < 1 ? '#dc2626' : '#111111';
+    ctx.font = '900 ' + Math.max(30, W * 0.065) + 'px "Arial Black", Arial, sans-serif';
+    ctx.fillText(remaining.toFixed(1), W / 2, H * 0.34);
+
+    ctx.fillStyle = '#555555';
+    ctx.font = '700 ' + Math.max(11, W * 0.017) + 'px Arial, sans-serif';
+    ctx.fillText('SPAM YOUR MOVES — CONFUSE THE AI', W / 2, H * 0.395);
+
+    var barW = Math.max(16, W * 0.028);
+    var barY = H * 0.46;
+    var barH = H * 0.27;
+    drawStressBar(W * 0.05, barY, barW, barH, game.playerStress, 'YOU', 'left');
+    drawStressBar(W * 0.95 - barW, barY, barW, barH, game.aiStress, 'CPU', 'right');
+
+    drawWeaponSlots(false);
+  }
+
   function drawClashAnimation(t){
     var progress = clamp((t - game.clashStart) / game.clashDuration, 0, 1);
     var handSize = Math.min(W, H) * 0.24;
@@ -914,8 +1095,8 @@ GAME_HTML = """
     drawHealthBar(W * 0.05, H * 0.14, W * 0.36, H * 0.055, game.playerHP, 3, 'YOU', 'left', playerFlashing, t);
     drawHealthBar(W * 0.59, H * 0.14, W * 0.36, H * 0.055, game.compHP, 3, 'CPU', 'right', compFlashing, t);
 
-    if (game.battlePhase === 'select') {
-      drawWeaponSlots(false);
+    if (game.battlePhase === 'confusion') {
+      drawConfusionPhase(t);
     } else if (game.battlePhase === 'clash') {
       drawClashAnimation(t);
     } else if (game.battlePhase === 'result') {
@@ -1041,7 +1222,17 @@ GAME_HTML = """
     if (game.paused) return;
 
     if (game.state === 'battle') {
-      if (game.battlePhase === 'clash') {
+      if (game.battlePhase === 'confusion') {
+        var elapsed = t - game.confusionStart;
+        var tickIndex = Math.floor(elapsed / 300);
+        if (tickIndex !== game.lastTickIndex && elapsed < game.confusionDuration) {
+          game.lastTickIndex = tickIndex;
+          sound('tick');
+        }
+        if (elapsed >= game.confusionDuration) {
+          lockInChoice();
+        }
+      } else if (game.battlePhase === 'clash') {
         var progress = clamp((t - game.clashStart) / game.clashDuration, 0, 1);
         if (progress >= IMPACT_PROGRESS && !game.impactTriggered) {
           game.impactTriggered = true;
@@ -1064,7 +1255,7 @@ GAME_HTML = """
             stopBgMusic();
             game.state = 'victory';
           } else {
-            game.battlePhase = 'select';
+            startConfusionPhase();
           }
         }
       }
@@ -1164,13 +1355,13 @@ GAME_HTML = """
         return;
       }
 
-      if (game.battlePhase === 'select') {
+      if (game.battlePhase === 'confusion') {
         for (var j = 0; j < game.weaponSlots.length; j++) {
           var s = game.weaponSlots[j];
           var dx = x - s.cx, dy = y - s.cy;
           if (dx * dx + dy * dy <= s.r * s.r) {
-            sound('snap');
-            chooseMove(s.value);
+            game.hoverSlot = s.value;
+            registerPlayerClick(s.value);
             return;
           }
         }
@@ -1188,7 +1379,7 @@ GAME_HTML = """
   });
 
   canvas.addEventListener('pointermove', function(e){
-    if (game.state === 'battle' && game.battlePhase === 'select' && !game.paused) {
+    if (game.state === 'battle' && game.battlePhase === 'confusion' && !game.paused) {
       var p = pointFromEvent(e);
       game.hoverSlot = null;
       for (var i = 0; i < game.weaponSlots.length; i++) {
