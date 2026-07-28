@@ -399,147 +399,198 @@ GAME_HTML = """
     c.closePath();
   }
 
-  function drawFistHand(c, cx, cy, size, flip, shadow){
-    c.save();
-    c.translate(cx, cy);
-    if (flip) c.scale(-1, 1);
-    if (shadow) {
-      c.shadowColor = 'rgba(0,0,0,0.45)';
-      c.shadowBlur = size * 0.15;
-      c.shadowOffsetY = size * 0.08;
-    }
-    c.fillStyle = '#ffffff';
-    c.strokeStyle = '#000000';
-    c.lineWidth = Math.max(3, size * 0.04);
-    c.lineJoin = 'round';
-
+  // A single tapered finger, drawn in LOCAL space with its base at (0,0)
+  // and its tip pointing toward -y (straight up) before any rotation is
+  // applied by the caller. Knuckle creases are drawn at the given
+  // fractional positions along its length (0 = base, 1 = tip).
+  function drawFingerLocal(c, length, wBase, wTip, joints, shadowOn){
+    var hwB = wBase / 2, hwT = wTip / 2;
     c.beginPath();
-    c.moveTo(-size * 0.18, size * 0.30);
-    c.lineTo(size * 0.18, size * 0.30);
-    c.lineTo(size * 0.22, size * 0.10);
-    c.lineTo(-size * 0.22, size * 0.10);
+    c.moveTo(-hwB, 0);
+    c.quadraticCurveTo(-hwB * 0.96, -length * 0.42, -hwT * 1.05, -length * 0.82);
+    c.quadraticCurveTo(-hwT * 0.7, -length, 0, -length);
+    c.quadraticCurveTo(hwT * 0.7, -length, hwT * 1.05, -length * 0.82);
+    c.quadraticCurveTo(hwB * 0.96, -length * 0.42, hwB, 0);
     c.closePath();
     c.fill(); c.stroke();
 
-    c.beginPath();
-    c.moveTo(-size * 0.30, size * 0.10);
-    c.bezierCurveTo(-size * 0.42, -size * 0.05, -size * 0.38, -size * 0.32, -size * 0.10, -size * 0.38);
-    c.bezierCurveTo(size * 0.16, -size * 0.44, size * 0.40, -size * 0.28, size * 0.36, -size * 0.02);
-    c.bezierCurveTo(size * 0.34, size * 0.10, size * 0.30, size * 0.14, size * 0.20, size * 0.14);
-    c.lineTo(-size * 0.20, size * 0.14);
-    c.closePath();
-    c.fill(); c.stroke();
-
-    var knuckleY = -size * 0.28;
-    var kxs = [-0.14, 0.0, 0.14, 0.27];
-    for (var i = 0; i < kxs.length; i++) {
-      c.beginPath();
-      c.arc(size * kxs[i], knuckleY, size * 0.075, 0, Math.PI * 2);
-      c.fill(); c.stroke();
-    }
-
-    c.beginPath();
-    c.moveTo(-size * 0.32, size * 0.02);
-    c.bezierCurveTo(-size * 0.52, -size * 0.02, -size * 0.50, size * 0.20, -size * 0.30, size * 0.18);
-    c.closePath();
-    c.fill(); c.stroke();
-
-    c.restore();
-  }
-
-  function drawScissorsHandShape(c, cx, cy, size, flip, shadow){
-    c.save();
-    c.translate(cx, cy);
-    if (flip) c.scale(-1, 1);
-    if (shadow) {
-      c.shadowColor = 'rgba(0,0,0,0.45)';
-      c.shadowBlur = size * 0.15;
-      c.shadowOffsetY = size * 0.08;
-    }
-    c.fillStyle = '#ffffff';
-    c.strokeStyle = '#000000';
-    c.lineWidth = Math.max(3, size * 0.04);
-    c.lineJoin = 'round';
-
-    c.beginPath();
-    c.moveTo(-size * 0.16, size * 0.34);
-    c.lineTo(size * 0.16, size * 0.34);
-    c.lineTo(size * 0.20, size * 0.14);
-    c.lineTo(-size * 0.20, size * 0.14);
-    c.closePath();
-    c.fill(); c.stroke();
-
-    c.beginPath();
-    c.ellipse(0, size * 0.06, size * 0.26, size * 0.16, 0, 0, Math.PI * 2);
-    c.fill(); c.stroke();
-
-    var kxs = [-0.16, 0.0, 0.16];
-    for (var i = 0; i < kxs.length; i++) {
-      c.beginPath();
-      c.arc(size * kxs[i], -size * 0.02, size * 0.09, 0, Math.PI * 2);
-      c.fill(); c.stroke();
-    }
-
-    c.beginPath();
-    c.moveTo(-size * 0.10, -size * 0.08);
-    c.lineTo(-size * 0.28, -size * 0.62);
-    c.lineTo(-size * 0.14, -size * 0.66);
-    c.lineTo(size * 0.02, -size * 0.14);
-    c.closePath();
-    c.fill(); c.stroke();
-
-    c.beginPath();
-    c.moveTo(size * 0.10, -size * 0.08);
-    c.lineTo(size * 0.30, -size * 0.58);
-    c.lineTo(size * 0.16, -size * 0.64);
-    c.lineTo(-size * 0.02, -size * 0.14);
-    c.closePath();
-    c.fill(); c.stroke();
-
-    c.restore();
-  }
-
-  function drawPaperHandShape(c, cx, cy, size, flip, shadow){
-    c.save();
-    c.translate(cx, cy);
-    if (flip) c.scale(-1, 1);
-    if (shadow) {
-      c.shadowColor = 'rgba(0,0,0,0.45)';
-      c.shadowBlur = size * 0.15;
-      c.shadowOffsetY = size * 0.08;
-    }
-    c.fillStyle = '#ffffff';
-    c.strokeStyle = '#000000';
-    c.lineWidth = Math.max(3, size * 0.035);
-    c.lineJoin = 'round';
-
-    c.beginPath();
-    c.moveTo(-size * 0.18, size * 0.38);
-    c.lineTo(size * 0.18, size * 0.38);
-    c.lineTo(size * 0.22, size * 0.16);
-    c.lineTo(-size * 0.22, size * 0.16);
-    c.closePath();
-    c.fill(); c.stroke();
-
-    c.beginPath();
-    c.ellipse(0, size * 0.06, size * 0.30, size * 0.20, 0, 0, Math.PI * 2);
-    c.fill(); c.stroke();
-
-    var angles = [-0.34, -0.13, 0.10, 0.32];
-    for (var i = 0; i < angles.length; i++) {
+    if (joints && joints.length) {
       c.save();
-      c.rotate(angles[i]);
-      var fw = size * 0.09, fl = size * 0.48;
-      roundRectPath(c, -fw / 2, -fl, fw, fl, fw * 0.4);
-      c.fill(); c.stroke();
+      if (!shadowOn) { c.shadowColor = 'transparent'; c.shadowBlur = 0; c.shadowOffsetY = 0; }
+      var savedWidth = c.lineWidth;
+      c.lineWidth = Math.max(1.5, savedWidth * 0.55);
+      c.strokeStyle = 'rgba(0,0,0,0.55)';
+      for (var i = 0; i < joints.length; i++) {
+        var f = joints[i];
+        var yy = -length * f;
+        var ww = (hwB + (hwT - hwB) * f) * 0.8;
+        c.beginPath();
+        c.moveTo(-ww, yy);
+        c.quadraticCurveTo(0, yy + length * 0.035, ww, yy);
+        c.stroke();
+      }
       c.restore();
     }
+  }
+
+  // Places a finger at (x,y) in the hand's local space, rotated by angle
+  // (radians, 0 = straight up, positive = tilts toward +x/right).
+  function drawFingerAt(c, x, y, angle, length, wBase, wTip, joints, shadowOn){
+    c.save();
+    c.translate(x, y);
+    c.rotate(angle);
+    drawFingerLocal(c, length, wBase, wTip, joints, shadowOn);
+    c.restore();
+  }
+
+  // A short rounded bump representing the visible top of a curled finger
+  // (used on the fist and for the tucked-in fingers on the scissors hand).
+  function drawKnuckleBump(c, x, y, w, h, shadowOn){
+    c.beginPath();
+    c.moveTo(x - w / 2, y + h * 0.35);
+    c.quadraticCurveTo(x - w / 2, y - h * 0.55, x, y - h * 0.6);
+    c.quadraticCurveTo(x + w / 2, y - h * 0.55, x + w / 2, y + h * 0.35);
+    c.lineTo(x - w / 2, y + h * 0.35);
+    c.closePath();
+    c.fill(); c.stroke();
 
     c.save();
-    c.rotate(-0.78);
-    roundRectPath(c, -size * 0.05, -size * 0.32, size * 0.10, size * 0.32, size * 0.04);
-    c.fill(); c.stroke();
+    if (!shadowOn) { c.shadowColor = 'transparent'; c.shadowBlur = 0; c.shadowOffsetY = 0; }
+    var savedWidth = c.lineWidth;
+    c.lineWidth = Math.max(1.5, savedWidth * 0.5);
+    c.strokeStyle = 'rgba(0,0,0,0.5)';
+    c.beginPath();
+    c.moveTo(x - w * 0.32, y - h * 0.05);
+    c.quadraticCurveTo(x, y + h * 0.03, x + w * 0.32, y - h * 0.05);
+    c.stroke();
     c.restore();
+  }
+
+  // A soft curved crease line (palm lines, wrist lines) with no shadow.
+  function drawCrease(c, x1, y1, cx1, cy1, x2, y2, weight){
+    c.save();
+    c.shadowColor = 'transparent';
+    c.shadowBlur = 0;
+    c.shadowOffsetY = 0;
+    var savedWidth = c.lineWidth;
+    c.lineWidth = Math.max(1.2, savedWidth * weight);
+    c.strokeStyle = 'rgba(0,0,0,0.4)';
+    c.beginPath();
+    c.moveTo(x1, y1);
+    c.quadraticCurveTo(cx1, cy1, x2, y2);
+    c.stroke();
+    c.restore();
+  }
+
+  function beginHand(c, cx, cy, size, flip, shadow){
+    c.save();
+    c.translate(cx, cy);
+    if (flip) c.scale(-1, 1);
+    if (shadow) {
+      c.shadowColor = 'rgba(0,0,0,0.45)';
+      c.shadowBlur = size * 0.14;
+      c.shadowOffsetY = size * 0.07;
+    }
+    c.fillStyle = '#ffffff';
+    c.strokeStyle = '#000000';
+    c.lineWidth = Math.max(2.5, size * 0.032);
+    c.lineJoin = 'round';
+    c.lineCap = 'round';
+  }
+
+  function drawWrist(c, size){
+    c.beginPath();
+    c.moveTo(-size * 0.17, size * 0.32);
+    c.lineTo(size * 0.17, size * 0.32);
+    c.quadraticCurveTo(size * 0.19, size * 0.22, size * 0.20, size * 0.13);
+    c.lineTo(-size * 0.20, size * 0.13);
+    c.quadraticCurveTo(-size * 0.19, size * 0.22, -size * 0.17, size * 0.32);
+    c.closePath();
+    c.fill(); c.stroke();
+  }
+
+  // ROCK — a closed fist: wrist, rounded knuckle mound, four curled
+  // finger-top bumps with knuckle creases, and a thumb wrapping the front.
+  function drawFistHand(c, cx, cy, size, flip, shadow){
+    beginHand(c, cx, cy, size, flip, shadow);
+
+    drawWrist(c, size);
+
+    c.beginPath();
+    c.moveTo(-size * 0.30, size * 0.13);
+    c.bezierCurveTo(-size * 0.40, -size * 0.02, -size * 0.36, -size * 0.20, -size * 0.20, -size * 0.24);
+    c.lineTo(size * 0.24, -size * 0.24);
+    c.bezierCurveTo(size * 0.38, -size * 0.20, size * 0.40, -size * 0.02, size * 0.30, size * 0.13);
+    c.closePath();
+    c.fill(); c.stroke();
+
+    var bumpXs = [-0.235, -0.075, 0.085, 0.235];
+    for (var i = 0; i < bumpXs.length; i++) {
+      drawKnuckleBump(c, size * bumpXs[i], -size * 0.24, size * 0.165, size * 0.24, shadow);
+    }
+
+    drawFingerAt(c, -size * 0.31, size * 0.08, 1.12, size * 0.40, size * 0.185, size * 0.135, [0.55], shadow);
+
+    drawCrease(c, -size * 0.10, size * 0.26, 0, size * 0.29, size * 0.10, size * 0.26, 0.4);
+    drawCrease(c, -size * 0.14, size * 0.03, -size * 0.02, size * 0.10, size * 0.10, size * 0.02, 0.35);
+
+    c.restore();
+  }
+
+  // SCISSORS — index and middle fingers fully extended in a V (each with
+  // two knuckle creases), ring and pinky curled into bumps, thumb tucked
+  // across the front.
+  function drawScissorsHandShape(c, cx, cy, size, flip, shadow){
+    beginHand(c, cx, cy, size, flip, shadow);
+
+    drawWrist(c, size);
+
+    c.beginPath();
+    c.ellipse(0.02 * size, size * 0.02, size * 0.27, size * 0.17, 0, 0, Math.PI * 2);
+    c.fill(); c.stroke();
+
+    drawKnuckleBump(c, size * 0.20, -size * 0.06, size * 0.15, size * 0.20, shadow);
+    drawKnuckleBump(c, size * 0.335, -size * 0.02, size * 0.145, size * 0.19, shadow);
+
+    drawFingerAt(c, -size * 0.30, size * 0.06, 1.02, size * 0.34, size * 0.18, size * 0.13, [0.55], shadow);
+
+    drawFingerAt(c, -size * 0.10, -size * 0.13, -0.24, size * 0.66, size * 0.15, size * 0.095, [0.42, 0.74], shadow);
+    drawFingerAt(c, size * 0.05, -size * 0.13, 0.16, size * 0.70, size * 0.155, size * 0.10, [0.42, 0.74], shadow);
+
+    drawCrease(c, -size * 0.08, size * 0.14, 0.02 * size, size * 0.18, size * 0.14, size * 0.10, 0.35);
+
+    c.restore();
+  }
+
+  // PAPER — an open palm with five distinct, individually tapered fingers
+  // fanned out (varied lengths), a thumb to the side, knuckle creases on
+  // every finger, and soft palm-line creases.
+  function drawPaperHandShape(c, cx, cy, size, flip, shadow){
+    beginHand(c, cx, cy, size, flip, shadow);
+
+    drawWrist(c, size);
+
+    c.beginPath();
+    c.moveTo(-size * 0.28, size * 0.13);
+    c.quadraticCurveTo(-size * 0.34, -size * 0.02, -size * 0.27, -size * 0.16);
+    c.quadraticCurveTo(-size * 0.20, -size * 0.24, -size * 0.06, -size * 0.24);
+    c.lineTo(size * 0.20, -size * 0.24);
+    c.quadraticCurveTo(size * 0.33, -size * 0.22, size * 0.32, -size * 0.06);
+    c.quadraticCurveTo(size * 0.31, size * 0.06, size * 0.28, size * 0.13);
+    c.closePath();
+    c.fill(); c.stroke();
+
+    // pinky, ring, middle, index — varied lengths for a natural fan
+    drawFingerAt(c, -size * 0.245, -size * 0.225, -0.36, size * 0.42, size * 0.085, size * 0.052, [0.4, 0.76], shadow);
+    drawFingerAt(c, -size * 0.095, -size * 0.245, -0.13, size * 0.56, size * 0.095, size * 0.056, [0.4, 0.76], shadow);
+    drawFingerAt(c, size * 0.065, -size * 0.245, 0.07, size * 0.62, size * 0.10, size * 0.06, [0.4, 0.76], shadow);
+    drawFingerAt(c, size * 0.205, -size * 0.22, 0.30, size * 0.50, size * 0.09, size * 0.055, [0.4, 0.76], shadow);
+
+    // thumb — shorter, thicker, angled out to the side
+    drawFingerAt(c, -size * 0.30, size * 0.02, -0.95, size * 0.34, size * 0.135, size * 0.085, [0.5], shadow);
+
+    drawCrease(c, -size * 0.14, size * 0.02, 0, size * 0.09, size * 0.16, -size * 0.01, 0.4);
+    drawCrease(c, -size * 0.16, size * 0.13, -size * 0.02, size * 0.16, size * 0.15, size * 0.11, 0.35);
 
     c.restore();
   }
