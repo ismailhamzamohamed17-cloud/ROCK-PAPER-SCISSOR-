@@ -166,6 +166,19 @@ GAME_HTML = """
       tickOsc.start(now);
       tickOsc.stop(now + 0.08);
 
+    } else if (type === 'blip') {
+      var bOsc = audioCtx.createOscillator();
+      bOsc.type = 'triangle';
+      bOsc.frequency.setValueAtTime(420, now);
+      bOsc.frequency.exponentialRampToValueAtTime(360, now + 0.06);
+      var bGain = audioCtx.createGain();
+      bGain.gain.setValueAtTime(0.14, now);
+      bGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+      bOsc.connect(bGain);
+      bGain.connect(audioCtx.destination);
+      bOsc.start(now);
+      bOsc.stop(now + 0.1);
+
     } else if (type === 'thud') {
       var tOsc = audioCtx.createOscillator();
       tOsc.type = 'triangle';
@@ -260,6 +273,7 @@ GAME_HTML = """
     aiStress: 0,
     aiChaosFallback: false,
     lastTickIndex: -1,
+    aiNextTick: 0,
 
     clashStart: 0,
     clashDuration: 1500,
@@ -402,6 +416,7 @@ GAME_HTML = """
     // The AI's opening read, based on its cross-round adaptive model.
     var base = computerChoose();
     game.aiTrail.push({ move: base, t: performance.now() });
+    game.aiNextTick = performance.now() + 160 + Math.random() * 200;
   }
 
   // Called every time the player taps a weapon during the confusion
@@ -433,17 +448,25 @@ GAME_HTML = """
       }
     }
 
-    // Recompute the AI's live leaning move from the trail read so far.
+    sound('snap');
+  }
+
+  // The AI "thinks" on its own independent cadence rather than mirroring
+  // the player's clicks 1:1 — it wakes up on its own schedule and reads
+  // whatever trail data exists at that moment, so its trail always lags
+  // and never lines up exactly with your last tap.
+  function advanceAiTrail(t){
     var currentMove;
     if (game.aiChaosFallback) {
+      currentMove = randomMove();
+    } else if (game.playerTrail.length === 0) {
       currentMove = randomMove();
     } else {
       var predicted = mostFrequent(trailFreq(game.playerTrail));
       currentMove = COUNTER[predicted];
     }
-    game.aiTrail.push({ move: currentMove, t: performance.now() });
-
-    sound('snap');
+    game.aiTrail.push({ move: currentMove, t: t });
+    sound('blip');
   }
 
   // Fires the exact millisecond the countdown hits zero: locks in the
@@ -494,6 +517,7 @@ GAME_HTML = """
       game.clashStart += delta;
       game.resultStart += delta;
       game.confusionStart += delta;
+      game.aiNextTick += delta;
       if (game.playerFlashUntil > 0) game.playerFlashUntil += delta;
       if (game.compFlashUntil > 0) game.compFlashUntil += delta;
       game.paused = false;
@@ -1228,6 +1252,13 @@ GAME_HTML = """
         if (tickIndex !== game.lastTickIndex && elapsed < game.confusionDuration) {
           game.lastTickIndex = tickIndex;
           sound('tick');
+        }
+        if (elapsed < game.confusionDuration && t >= game.aiNextTick) {
+          advanceAiTrail(t);
+          var jitter = 190 + Math.random() * 230;
+          if (game.difficulty === 'HARD') jitter *= 0.72;
+          else if (game.difficulty === 'EASY') jitter *= 1.35;
+          game.aiNextTick = t + jitter;
         }
         if (elapsed >= game.confusionDuration) {
           lockInChoice();
