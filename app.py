@@ -134,7 +134,6 @@ GAME_HTML = """
     var now = audioCtx.currentTime;
 
     if (type === 'snap') {
-      // Sharp physical cloth snap / slap: high-frequency bandpass + ultra-fast decay
       var osc = audioCtx.createOscillator();
       osc.type = 'square';
       osc.frequency.setValueAtTime(1600, now);
@@ -156,7 +155,6 @@ GAME_HTML = """
       osc.stop(now + 0.05);
 
     } else if (type === 'thud') {
-      // Heavy organic impact: low triangle sweep 150Hz -> 30Hz + low-pass white noise burst
       var tOsc = audioCtx.createOscillator();
       tOsc.type = 'triangle';
       tOsc.frequency.setValueAtTime(150, now);
@@ -200,7 +198,7 @@ GAME_HTML = """
     var pattern = [220, 0, 262, 220, 0, 330, 262, 0, 220, 0, 294, 262];
     var step = 0;
     bgInterval = setInterval(function(){
-      if (!audioCtx) return;
+      if (!audioCtx || game.paused) return;
       var freq = pattern[step % pattern.length];
       step++;
       if (freq > 0) {
@@ -250,12 +248,27 @@ GAME_HTML = """
     diffButtons: [],
     enterButton: null,
     weaponSlots: [],
-    retryButton: null
+    retryButton: null,
+    paused: false,
+    pauseStartTime: 0,
+    pauseButton: null,
+    resumeButton: null,
+    changeDiffButton: null,
+    resetMainButton: null,
+    playerFlashUntil: 0,
+    compFlashUntil: 0
   };
 
   var BEATS = { rock: 'scissors', scissors: 'paper', paper: 'rock' };
   var COUNTER = { scissors: 'rock', paper: 'scissors', rock: 'paper' };
   var LABELS = { rock: '✊ ROCK', paper: '✋ PAPER', scissors: '✌️ SCISSORS' };
+
+  // Fraction of the clash duration spent on the 3-swing telegraph windup;
+  // the remainder is the punch that carries the hands together to clash.
+  var SWING_PHASE_FRACTION = 0.68;
+  // Fraction of total clash duration at which the impact (particles,
+  // shake, thud) actually fires.
+  var IMPACT_PROGRESS = 0.96;
 
   function randomMove(){
     var m = ['rock', 'paper', 'scissors'];
@@ -310,9 +323,11 @@ GAME_HTML = """
       game.compHP = Math.max(0, game.compHP - 1);
       game.resultMessage = 'YOU WIN THE CLASH!';
       game.playerWinMoves.push(game.selectedMove);
+      game.compFlashUntil = game.resultStart + 550;
     } else if (outcome === 'computer') {
       game.playerHP = Math.max(0, game.playerHP - 1);
       game.resultMessage = 'COMPUTER WINS THE CLASH!';
+      game.playerFlashUntil = game.resultStart + 550;
     } else {
       game.resultMessage = "IT'S A TIE!";
     }
@@ -327,6 +342,10 @@ GAME_HTML = """
     game.compMove = null;
     game.particles = [];
     game.shake = 0;
+    game.paused = false;
+    game.pauseStartTime = 0;
+    game.playerFlashUntil = 0;
+    game.compFlashUntil = 0;
     game.state = 'battle';
     game.battlePhase = 'select';
     startBgMusic();
@@ -343,8 +362,37 @@ GAME_HTML = """
 
   function resetGame(){
     stopBgMusic();
+    game.paused = false;
+    game.pauseStartTime = 0;
     game.state = 'menu';
     game.battlePhase = 'select';
+  }
+
+  function goToLoading(){
+    stopBgMusic();
+    game.paused = false;
+    game.pauseStartTime = 0;
+    game.state = 'loading';
+    game.battlePhase = 'select';
+  }
+
+  function togglePause(){
+    if (!game.paused) {
+      game.paused = true;
+      game.pauseStartTime = performance.now();
+    } else {
+      var delta = performance.now() - game.pauseStartTime;
+      game.clashStart += delta;
+      game.resultStart += delta;
+      if (game.playerFlashUntil > 0) game.playerFlashUntil += delta;
+      if (game.compFlashUntil > 0) game.compFlashUntil += delta;
+      game.paused = false;
+      game.pauseStartTime = 0;
+    }
+  }
+
+  function gameTime(t){
+    return game.paused ? game.pauseStartTime : t;
   }
 
   // ---------------------------------------------------------------------
@@ -399,6 +447,17 @@ GAME_HTML = """
     c.closePath();
   }
 
+  function setUIShadow(c){
+    c.shadowColor = 'rgba(0,0,0,0.18)';
+    c.shadowBlur = 10;
+    c.shadowOffsetY = 5;
+  }
+  function clearUIShadow(c){
+    c.shadowColor = 'transparent';
+    c.shadowBlur = 0;
+    c.shadowOffsetY = 0;
+  }
+
   // A single tapered finger, drawn in LOCAL space with its base at (0,0)
   // and its tip pointing toward -y (straight up) before any rotation is
   // applied by the caller. Knuckle creases are drawn at the given
@@ -418,7 +477,7 @@ GAME_HTML = """
       c.save();
       if (!shadowOn) { c.shadowColor = 'transparent'; c.shadowBlur = 0; c.shadowOffsetY = 0; }
       var savedWidth = c.lineWidth;
-      c.lineWidth = Math.max(1.5, savedWidth * 0.55);
+      c.lineWidth = Math.max(1.8, savedWidth * 0.5);
       c.strokeStyle = 'rgba(0,0,0,0.55)';
       for (var i = 0; i < joints.length; i++) {
         var f = joints[i];
@@ -433,8 +492,6 @@ GAME_HTML = """
     }
   }
 
-  // Places a finger at (x,y) in the hand's local space, rotated by angle
-  // (radians, 0 = straight up, positive = tilts toward +x/right).
   function drawFingerAt(c, x, y, angle, length, wBase, wTip, joints, shadowOn){
     c.save();
     c.translate(x, y);
@@ -443,8 +500,6 @@ GAME_HTML = """
     c.restore();
   }
 
-  // A short rounded bump representing the visible top of a curled finger
-  // (used on the fist and for the tucked-in fingers on the scissors hand).
   function drawKnuckleBump(c, x, y, w, h, shadowOn){
     c.beginPath();
     c.moveTo(x - w / 2, y + h * 0.35);
@@ -457,7 +512,7 @@ GAME_HTML = """
     c.save();
     if (!shadowOn) { c.shadowColor = 'transparent'; c.shadowBlur = 0; c.shadowOffsetY = 0; }
     var savedWidth = c.lineWidth;
-    c.lineWidth = Math.max(1.5, savedWidth * 0.5);
+    c.lineWidth = Math.max(1.8, savedWidth * 0.45);
     c.strokeStyle = 'rgba(0,0,0,0.5)';
     c.beginPath();
     c.moveTo(x - w * 0.32, y - h * 0.05);
@@ -466,7 +521,6 @@ GAME_HTML = """
     c.restore();
   }
 
-  // A soft curved crease line (palm lines, wrist lines) with no shadow.
   function drawCrease(c, x1, y1, cx1, cy1, x2, y2, weight){
     c.save();
     c.shadowColor = 'transparent';
@@ -487,13 +541,13 @@ GAME_HTML = """
     c.translate(cx, cy);
     if (flip) c.scale(-1, 1);
     if (shadow) {
-      c.shadowColor = 'rgba(0,0,0,0.45)';
-      c.shadowBlur = size * 0.14;
-      c.shadowOffsetY = size * 0.07;
+      c.shadowColor = 'rgba(0,0,0,0.5)';
+      c.shadowBlur = size * 0.16;
+      c.shadowOffsetY = size * 0.09;
     }
     c.fillStyle = '#ffffff';
     c.strokeStyle = '#000000';
-    c.lineWidth = Math.max(2.5, size * 0.032);
+    c.lineWidth = Math.max(3.5, size * 0.032);
     c.lineJoin = 'round';
     c.lineCap = 'round';
   }
@@ -580,13 +634,11 @@ GAME_HTML = """
     c.closePath();
     c.fill(); c.stroke();
 
-    // pinky, ring, middle, index — varied lengths for a natural fan
     drawFingerAt(c, -size * 0.245, -size * 0.225, -0.36, size * 0.42, size * 0.085, size * 0.052, [0.4, 0.76], shadow);
     drawFingerAt(c, -size * 0.095, -size * 0.245, -0.13, size * 0.56, size * 0.095, size * 0.056, [0.4, 0.76], shadow);
     drawFingerAt(c, size * 0.065, -size * 0.245, 0.07, size * 0.62, size * 0.10, size * 0.06, [0.4, 0.76], shadow);
     drawFingerAt(c, size * 0.205, -size * 0.22, 0.30, size * 0.50, size * 0.09, size * 0.055, [0.4, 0.76], shadow);
 
-    // thumb — shorter, thicker, angled out to the side
     drawFingerAt(c, -size * 0.30, size * 0.02, -0.95, size * 0.34, size * 0.135, size * 0.085, [0.5], shadow);
 
     drawCrease(c, -size * 0.14, size * 0.02, 0, size * 0.09, size * 0.16, -size * 0.01, 0.4);
@@ -647,11 +699,14 @@ GAME_HTML = """
       var d = diffs[i];
       var x = startX + i * (btnW + gap);
       var selected = game.difficulty === d;
+      ctx.save();
+      setUIShadow(ctx);
       ctx.fillStyle = selected ? '#dc2626' : '#ffffff';
       ctx.strokeStyle = '#000000';
       ctx.lineWidth = 4;
       roundRectPath(ctx, x, y, btnW, btnH, 10);
       ctx.fill(); ctx.stroke();
+      ctx.restore();
       ctx.fillStyle = selected ? '#ffffff' : '#111111';
       ctx.font = '800 ' + Math.max(15, btnW * 0.15) + 'px Arial, sans-serif';
       ctx.fillText(d, x + btnW / 2, y + btnH / 2);
@@ -660,8 +715,8 @@ GAME_HTML = """
 
     var descs = {
       EASY: 'Computer picks completely at random.',
-      MEDIUM: 'Computer studies your move history to guess your next move.',
-      HARD: 'Computer predicts and counters your winning patterns.'
+      MEDIUM: 'Computer tracks your last 6 moves and throws the counter to your most frequent one.',
+      HARD: 'Computer studies the move you use most often when YOU win, and targets that bias.'
     };
     ctx.fillStyle = '#555555';
     ctx.font = '500 ' + Math.max(12, W * 0.017) + 'px Arial, sans-serif';
@@ -671,18 +726,21 @@ GAME_HTML = """
     var eH = Math.max(58, H * 0.09);
     var ex = W / 2 - eW / 2;
     var ey = H * 0.58;
+    ctx.save();
+    setUIShadow(ctx);
     ctx.fillStyle = '#dc2626';
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 4;
     roundRectPath(ctx, ex, ey, eW, eH, 14);
     ctx.fill(); ctx.stroke();
+    ctx.restore();
     ctx.fillStyle = '#ffffff';
     ctx.font = '900 ' + Math.max(17, eW * 0.088) + 'px Arial, sans-serif';
     ctx.fillText('ENTER THE ARENA 🔥', ex + eW / 2, ey + eH / 2);
     game.enterButton = { x: ex, y: ey, w: eW, h: eH };
   }
 
-  function drawHealthBar(x, y, w, h, hp, maxHp, label, align){
+  function drawHealthBar(x, y, w, h, hp, maxHp, label, align, flashing, t){
     ctx.textAlign = align === 'left' ? 'left' : 'right';
     ctx.fillStyle = '#111111';
     ctx.font = '800 ' + Math.max(12, h * 0.55) + 'px Arial, sans-serif';
@@ -693,7 +751,11 @@ GAME_HTML = """
     ctx.strokeRect(x, y, w, h);
 
     var frac = hp / maxHp;
-    var color = frac > 0.66 ? '#16a34a' : (frac > 0.33 ? '#eab308' : '#dc2626');
+    var normalColor = frac > 0.66 ? '#16a34a' : (frac > 0.33 ? '#eab308' : '#dc2626');
+    var color = normalColor;
+    if (flashing) {
+      color = (Math.floor(t / 90) % 2 === 0) ? '#dc2626' : '#ffffff';
+    }
     ctx.fillStyle = color;
     var fillW = w * frac;
     if (align === 'left') {
@@ -704,7 +766,28 @@ GAME_HTML = """
     ctx.strokeRect(x, y, w, h);
   }
 
-  function drawWeaponSlots(){
+  function drawPauseIcon(){
+    var iconX = W * 0.045, iconY = H * 0.055;
+    var lineW = Math.max(24, W * 0.05);
+    var lineH = Math.max(3, H * 0.007);
+    var gap = lineH * 2.4;
+
+    ctx.save();
+    setUIShadow(ctx);
+    ctx.fillStyle = '#111111';
+    for (var i = 0; i < 3; i++) {
+      roundRectPath(ctx, iconX, iconY + i * gap, lineW, lineH, lineH / 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    game.pauseButton = {
+      x: iconX - 10, y: iconY - 10,
+      w: lineW + 20, h: gap * 2 + lineH + 20
+    };
+  }
+
+  function drawWeaponSlots(showSelected){
     var slots = [
       { value: 'rock', label: '✊ ROCK' },
       { value: 'paper', label: '✋ PAPER' },
@@ -720,14 +803,26 @@ GAME_HTML = """
     for (var i = 0; i < slots.length; i++) {
       var s = slots[i];
       var cx = startX + i * (r * 2 + gap);
-      var hovered = game.hoverSlot === s.value;
+      var isSelected = showSelected && game.selectedMove === s.value;
+      var hovered = !showSelected && game.hoverSlot === s.value;
+
+      ctx.save();
+      if (isSelected) {
+        ctx.shadowColor = 'rgba(0,0,0,0.35)';
+        ctx.shadowBlur = 12;
+        ctx.shadowOffsetY = 7;
+      } else {
+        setUIShadow(ctx);
+      }
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = isSelected ? '#dc2626' : '#ffffff';
       ctx.strokeStyle = hovered ? '#dc2626' : '#000000';
       ctx.lineWidth = hovered ? 6 : 4;
       ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#111111';
+      ctx.restore();
+
+      ctx.fillStyle = isSelected ? '#ffffff' : '#111111';
       ctx.textAlign = 'center';
       ctx.font = '700 ' + Math.max(13, r * 0.24) + 'px Arial, sans-serif';
       ctx.fillText(s.label, cx, cy);
@@ -737,18 +832,49 @@ GAME_HTML = """
 
   function moveLabel(m){ return LABELS[m]; }
 
+  // The telegraph swing: both hands hold position and bob up/down together
+  // through 3 full cycles. During this window the computer's hand carries a
+  // subtle move-specific "tell" — a sharp reader can learn to recognize it.
+  // Afterward both hands punch inward to the center and collide.
   function drawClashAnimation(t){
     var progress = clamp((t - game.clashStart) / game.clashDuration, 0, 1);
-    var ease = easeOutCubic(progress / 0.6);
-    var startOffset = W * 0.62;
-    var leftX = lerp(W * 0.5 - startOffset, W * 0.32, ease);
-    var rightX = lerp(W * 0.5 + startOffset, W * 0.68, ease);
     var handSize = Math.min(W, H) * 0.24;
+    var baseLeftX = W * 0.30, baseRightX = W * 0.70;
+    var meetLeftX = W * 0.42, meetRightX = W * 0.58;
+    var midY = H * 0.42;
 
-    drawHandForMove(game.selectedMove, ctx, leftX, H * 0.42, handSize, false, true);
-    drawHandForMove(game.compMove, ctx, rightX, H * 0.42, handSize, true, true);
+    var leftX = baseLeftX, rightX = baseRightX;
+    var leftY = midY, rightY = midY;
 
-    if (progress >= 0.55) {
+    if (progress < SWING_PHASE_FRACTION) {
+      var sp = progress / SWING_PHASE_FRACTION;
+      var bob = Math.sin(sp * 3 * Math.PI * 2);
+      var bobAmp = handSize * 0.09;
+      var bobOffset = -bob * bobAmp;
+
+      leftY = midY + bobOffset;
+      rightY = midY + bobOffset;
+
+      if (game.compMove === 'rock') {
+        rightY += (Math.random() * 2 - 1) * 5;
+      } else if (game.compMove === 'paper') {
+        var peakFactor = Math.max(0, bob);
+        rightY += -8 * peakFactor;
+      } else if (game.compMove === 'scissors') {
+        rightX += Math.sin(t * 0.09) * 2.5 + (Math.random() * 2 - 1) * 1.5;
+      }
+    } else {
+      var pp = easeOutCubic((progress - SWING_PHASE_FRACTION) / (1 - SWING_PHASE_FRACTION));
+      leftX = lerp(baseLeftX, meetLeftX, pp);
+      rightX = lerp(baseRightX, meetRightX, pp);
+      leftY = midY;
+      rightY = midY;
+    }
+
+    drawHandForMove(game.selectedMove, ctx, leftX, leftY, handSize, false, true);
+    drawHandForMove(game.compMove, ctx, rightX, rightY, handSize, true, true);
+
+    if (progress >= SWING_PHASE_FRACTION + (1 - SWING_PHASE_FRACTION) * 0.5) {
       ctx.textAlign = 'center';
       ctx.fillStyle = '#000000';
       ctx.font = '900 ' + Math.max(15, W * 0.028) + 'px Arial, sans-serif';
@@ -765,12 +891,14 @@ GAME_HTML = """
   }
 
   function drawBattle(t, dt){
+    var frameDt = game.paused ? 0 : dt;
+
     ctx.save();
-    if (game.shake > 0) {
+    if (game.shake > 0 && !game.paused) {
       var sx = (Math.random() * 2 - 1) * game.shake;
       var sy = (Math.random() * 2 - 1) * game.shake;
       ctx.translate(sx, sy);
-      game.shake = Math.max(0, game.shake - dt * 0.03);
+      game.shake = Math.max(0, game.shake - frameDt * 0.03);
     }
 
     ctx.fillStyle = '#ffffff';
@@ -779,19 +907,84 @@ GAME_HTML = """
     ctx.lineWidth = 6;
     ctx.strokeRect(3, 3, W - 6, H - 6);
 
-    drawHealthBar(W * 0.05, H * 0.09, W * 0.36, H * 0.055, game.playerHP, 3, 'YOU', 'left');
-    drawHealthBar(W * 0.59, H * 0.09, W * 0.36, H * 0.055, game.compHP, 3, 'CPU', 'right');
+    drawPauseIcon();
+
+    var playerFlashing = t < game.playerFlashUntil;
+    var compFlashing = t < game.compFlashUntil;
+    drawHealthBar(W * 0.05, H * 0.14, W * 0.36, H * 0.055, game.playerHP, 3, 'YOU', 'left', playerFlashing, t);
+    drawHealthBar(W * 0.59, H * 0.14, W * 0.36, H * 0.055, game.compHP, 3, 'CPU', 'right', compFlashing, t);
 
     if (game.battlePhase === 'select') {
-      drawWeaponSlots();
+      drawWeaponSlots(false);
     } else if (game.battlePhase === 'clash') {
       drawClashAnimation(t);
     } else if (game.battlePhase === 'result') {
-      drawWeaponSlots();
+      drawWeaponSlots(true);
       drawResultBanner();
     }
 
-    updateAndDrawParticles(dt);
+    updateAndDrawParticles(frameDt);
+    ctx.restore();
+  }
+
+  function drawOverlayButton(x, y, w, h, label, bg, textColor){
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.18)';
+    ctx.shadowBlur = 8;
+    ctx.shadowOffsetY = 4;
+    ctx.fillStyle = bg;
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 3;
+    roundRectPath(ctx, x, y, w, h, 12);
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = textColor;
+    ctx.font = '800 ' + Math.max(13, w * 0.058) + 'px Arial, sans-serif';
+    ctx.fillText(label, x + w / 2, y + h / 2);
+  }
+
+  function drawPauseOverlay(){
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.90)';
+    ctx.fillRect(0, 0, W, H);
+
+    var cardW = Math.min(380, W * 0.74);
+    var cardH = Math.max(280, H * 0.46);
+    var cx = W / 2 - cardW / 2;
+    var cy = H / 2 - cardH / 2;
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.25)';
+    ctx.shadowBlur = 26;
+    ctx.shadowOffsetY = 12;
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 3;
+    roundRectPath(ctx, cx, cy, cardW, cardH, 18);
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#111111';
+    ctx.font = '900 ' + Math.max(20, cardW * 0.09) + 'px "Arial Black", Arial, sans-serif';
+    ctx.fillText('PAUSED', W / 2, cy + cardH * 0.17);
+
+    var bW = cardW * 0.80, bH = Math.max(46, cardH * 0.135);
+    var bx = W / 2 - bW / 2;
+    var by1 = cy + cardH * 0.32;
+    var by2 = by1 + bH + cardH * 0.06;
+    var by3 = by2 + bH + cardH * 0.06;
+
+    drawOverlayButton(bx, by1, bW, bH, 'RESUME BATTLE', '#dc2626', '#ffffff');
+    game.resumeButton = { x: bx, y: by1, w: bW, h: bH };
+
+    drawOverlayButton(bx, by2, bW, bH, 'CHANGE ARENA DIFFICULTY', '#ffffff', '#111111');
+    game.changeDiffButton = { x: bx, y: by2, w: bW, h: bH };
+
+    drawOverlayButton(bx, by3, bW, bH, 'RESET TO MAIN SCREEN', '#ffffff', '#111111');
+    game.resetMainButton = { x: bx, y: by3, w: bW, h: bH };
+
     ctx.restore();
   }
 
@@ -824,11 +1017,16 @@ GAME_HTML = """
     var bH = Math.max(54, H * 0.085);
     var bx = W / 2 - bW / 2;
     var by = H * 0.62;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.2)';
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetY = 6;
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = textColor;
     ctx.lineWidth = 4;
     roundRectPath(ctx, bx, by, bW, bH, 14);
     ctx.fill(); ctx.stroke();
+    ctx.restore();
     ctx.fillStyle = textColor;
     ctx.textAlign = 'center';
     ctx.font = '800 ' + Math.max(15, bW * 0.085) + 'px Arial, sans-serif';
@@ -840,10 +1038,12 @@ GAME_HTML = """
   // MAIN LOOP
   // ---------------------------------------------------------------------
   function update(t, dt){
+    if (game.paused) return;
+
     if (game.state === 'battle') {
       if (game.battlePhase === 'clash') {
         var progress = clamp((t - game.clashStart) / game.clashDuration, 0, 1);
-        if (progress >= 0.5 && !game.impactTriggered) {
+        if (progress >= IMPACT_PROGRESS && !game.impactTriggered) {
           game.impactTriggered = true;
           spawnParticles(W / 2, H * 0.42, 15);
           game.shake = 18;
@@ -874,11 +1074,19 @@ GAME_HTML = """
   function draw(t, dt){
     ctx.textBaseline = 'middle';
     ctx.clearRect(0, 0, W, H);
-    if (game.state === 'loading') drawLoading(t);
-    else if (game.state === 'menu') drawMenu();
-    else if (game.state === 'battle') drawBattle(t, dt);
-    else if (game.state === 'victory') drawVictory();
-    else if (game.state === 'defeat') drawDefeat();
+    if (game.state === 'loading') {
+      drawLoading(t);
+    } else if (game.state === 'menu') {
+      drawMenu();
+    } else if (game.state === 'battle') {
+      var gt = gameTime(t);
+      drawBattle(gt, dt);
+      if (game.paused) drawPauseOverlay();
+    } else if (game.state === 'victory') {
+      drawVictory();
+    } else if (game.state === 'defeat') {
+      drawDefeat();
+    }
   }
 
   var lastT = performance.now();
@@ -930,14 +1138,41 @@ GAME_HTML = """
       return;
     }
 
-    if (game.state === 'battle' && game.battlePhase === 'select') {
-      for (var j = 0; j < game.weaponSlots.length; j++) {
-        var s = game.weaponSlots[j];
-        var dx = x - s.cx, dy = y - s.cy;
-        if (dx * dx + dy * dy <= s.r * s.r) {
+    if (game.state === 'battle') {
+      if (game.paused) {
+        if (hitButton(game.resumeButton, x, y)) {
           sound('snap');
-          chooseMove(s.value);
+          togglePause();
           return;
+        }
+        if (hitButton(game.changeDiffButton, x, y)) {
+          sound('snap');
+          resetGame();
+          return;
+        }
+        if (hitButton(game.resetMainButton, x, y)) {
+          sound('snap');
+          goToLoading();
+          return;
+        }
+        return;
+      }
+
+      if (hitButton(game.pauseButton, x, y)) {
+        sound('snap');
+        togglePause();
+        return;
+      }
+
+      if (game.battlePhase === 'select') {
+        for (var j = 0; j < game.weaponSlots.length; j++) {
+          var s = game.weaponSlots[j];
+          var dx = x - s.cx, dy = y - s.cy;
+          if (dx * dx + dy * dy <= s.r * s.r) {
+            sound('snap');
+            chooseMove(s.value);
+            return;
+          }
         }
       }
       return;
@@ -953,7 +1188,7 @@ GAME_HTML = """
   });
 
   canvas.addEventListener('pointermove', function(e){
-    if (game.state === 'battle' && game.battlePhase === 'select') {
+    if (game.state === 'battle' && game.battlePhase === 'select' && !game.paused) {
       var p = pointFromEvent(e);
       game.hoverSlot = null;
       for (var i = 0; i < game.weaponSlots.length; i++) {
