@@ -254,7 +254,10 @@ GAME_HTML = """
   // ---------------------------------------------------------------------
   var game = {
     state: 'loading',           // loading | menu | battle | victory | defeat
-    battlePhase: 'confusion',   // confusion | clash | result
+    battlePhase: 'confusion',   // confusion | clash | result | handoff
+    mode: 'cpu',                 // cpu | local
+    activePlayer: 1,
+    p1Move: null,
     difficulty: 'EASY',
     playerHP: 3,
     compHP: 3,
@@ -284,6 +287,7 @@ GAME_HTML = """
     shake: 0,
     hoverSlot: null,
     diffButtons: [],
+    modeButtons: [],
     enterButton: null,
     weaponSlots: [],
     retryButton: null,
@@ -368,12 +372,12 @@ GAME_HTML = """
   function applyOutcome(outcome){
     if (outcome === 'player') {
       game.compHP = Math.max(0, game.compHP - 1);
-      game.resultMessage = 'YOU WIN THE CLASH!';
+      game.resultMessage = game.mode === 'local' ? 'PLAYER 1 WINS THE CLASH!' : 'YOU WIN THE CLASH!';
       game.playerWinMoves.push(game.selectedMove);
       game.compFlashUntil = game.resultStart + 550;
     } else if (outcome === 'computer') {
       game.playerHP = Math.max(0, game.playerHP - 1);
-      game.resultMessage = 'COMPUTER WINS THE CLASH!';
+      game.resultMessage = game.mode === 'local' ? 'PLAYER 2 WINS THE CLASH!' : 'COMPUTER WINS THE CLASH!';
       game.playerFlashUntil = game.resultStart + 550;
     } else {
       game.resultMessage = "IT'S A TIE!";
@@ -387,6 +391,7 @@ GAME_HTML = """
     game.playerWinMoves = [];
     game.selectedMove = null;
     game.compMove = null;
+    game.p1Move = null;
     game.particles = [];
     game.shake = 0;
     game.paused = false;
@@ -395,7 +400,12 @@ GAME_HTML = """
     game.compFlashUntil = 0;
     game.state = 'battle';
     startBgMusic();
-    startConfusionPhase();
+    if (game.mode === 'local') {
+      game.activePlayer = 1;
+      game.battlePhase = 'handoff';
+    } else {
+      startConfusionPhase();
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -413,10 +423,12 @@ GAME_HTML = """
     game.lastTickIndex = -1;
     game.hoverSlot = null;
 
-    // The AI's opening read, based on its cross-round adaptive model.
-    var base = computerChoose();
-    game.aiTrail.push({ move: base, t: performance.now() });
-    game.aiNextTick = performance.now() + 160 + Math.random() * 200;
+    if (game.mode === 'cpu') {
+      // The AI's opening read, based on its cross-round adaptive model.
+      var base = computerChoose();
+      game.aiTrail.push({ move: base, t: performance.now() });
+      game.aiNextTick = performance.now() + 160 + Math.random() * 200;
+    }
   }
 
   // Called every time the player taps a weapon during the confusion
@@ -473,16 +485,29 @@ GAME_HTML = """
   // last move the player touched and the AI's final read, then clears
   // the trails and kicks off the clash animation.
   function lockInChoice(){
-    var finalPlayerMove = game.playerTrail.length
+    var finalMove = game.playerTrail.length
       ? game.playerTrail[game.playerTrail.length - 1].move
       : (game.hoverSlot || randomMove());
-    var finalCompMove = game.aiTrail.length
-      ? game.aiTrail[game.aiTrail.length - 1].move
-      : randomMove();
 
-    game.selectedMove = finalPlayerMove;
-    game.playerHistory.push(finalPlayerMove);
-    game.compMove = finalCompMove;
+    if (game.mode === 'local' && game.activePlayer === 1) {
+      game.p1Move = finalMove;
+      game.playerTrail = [];
+      game.aiTrail = [];
+      game.activePlayer = 2;
+      game.battlePhase = 'handoff';
+      return;
+    }
+
+    if (game.mode === 'local') {
+      game.selectedMove = game.p1Move;
+      game.compMove = finalMove;
+    } else {
+      game.selectedMove = finalMove;
+      game.playerHistory.push(finalMove);
+      game.compMove = game.aiTrail.length
+        ? game.aiTrail[game.aiTrail.length - 1].move
+        : randomMove();
+    }
 
     game.playerTrail = [];
     game.aiTrail = [];
@@ -821,44 +846,85 @@ GAME_HTML = """
 
     ctx.textAlign = 'center';
     ctx.fillStyle = '#111111';
-    ctx.font = '900 ' + Math.max(20, W * 0.04) + 'px "Arial Black", Arial, sans-serif';
-    ctx.fillText('SELECT DIFFICULTY', W / 2, H * 0.20);
+    ctx.font = '900 ' + Math.max(15, W * 0.028) + 'px "Arial Black", Arial, sans-serif';
+    ctx.fillText('GAME MODE', W / 2, H * 0.095);
 
-    var diffs = ['EASY', 'MEDIUM', 'HARD'];
-    var btnW = Math.min(210, W * 0.26);
-    var btnH = Math.max(48, H * 0.075);
-    var gap = W * 0.03;
-    var totalW = diffs.length * btnW + (diffs.length - 1) * gap;
-    var startX = W / 2 - totalW / 2;
-    var y = H * 0.30;
-    game.diffButtons = [];
-
-    for (var i = 0; i < diffs.length; i++) {
-      var d = diffs[i];
-      var x = startX + i * (btnW + gap);
-      var selected = game.difficulty === d;
+    var modes = [
+      { value: 'cpu', label: 'VS COMPUTER' },
+      { value: 'local', label: '2P — SAME DEVICE' }
+    ];
+    var mBtnW = Math.min(230, W * 0.36);
+    var mBtnH = Math.max(42, H * 0.065);
+    var mGap = W * 0.03;
+    var mTotalW = modes.length * mBtnW + (modes.length - 1) * mGap;
+    var mStartX = W / 2 - mTotalW / 2;
+    var mY = H * 0.13;
+    game.modeButtons = [];
+    for (var mi = 0; mi < modes.length; mi++) {
+      var md = modes[mi];
+      var mx = mStartX + mi * (mBtnW + mGap);
+      var mSelected = game.mode === md.value;
       ctx.save();
       setUIShadow(ctx);
-      ctx.fillStyle = selected ? '#dc2626' : '#ffffff';
+      ctx.fillStyle = mSelected ? '#111111' : '#ffffff';
       ctx.strokeStyle = '#000000';
       ctx.lineWidth = 4;
-      roundRectPath(ctx, x, y, btnW, btnH, 10);
+      roundRectPath(ctx, mx, mY, mBtnW, mBtnH, 10);
       ctx.fill(); ctx.stroke();
       ctx.restore();
-      ctx.fillStyle = selected ? '#ffffff' : '#111111';
-      ctx.font = '800 ' + Math.max(15, btnW * 0.15) + 'px Arial, sans-serif';
-      ctx.fillText(d, x + btnW / 2, y + btnH / 2);
-      game.diffButtons.push({ x: x, y: y, w: btnW, h: btnH, value: d });
+      ctx.fillStyle = mSelected ? '#ffffff' : '#111111';
+      ctx.font = '800 ' + Math.max(12, mBtnW * 0.095) + 'px Arial, sans-serif';
+      ctx.fillText(md.label, mx + mBtnW / 2, mY + mBtnH / 2);
+      game.modeButtons.push({ x: mx, y: mY, w: mBtnW, h: mBtnH, value: md.value });
     }
 
-    var descs = {
-      EASY: 'Computer picks completely at random. Its stress stays calm no matter how you spam.',
-      MEDIUM: 'Computer reads your live click trail and drifts toward stress if you switch moves twice.',
-      HARD: 'Computer studies your trail closely — but an erratic spam pattern can overwhelm it into a random panic pick.'
-    };
-    ctx.fillStyle = '#555555';
-    ctx.font = '500 ' + Math.max(12, W * 0.016) + 'px Arial, sans-serif';
-    ctx.fillText(descs[game.difficulty], W / 2, y + btnH + H * 0.05);
+    if (game.mode === 'cpu') {
+      ctx.fillStyle = '#111111';
+      ctx.font = '900 ' + Math.max(17, W * 0.032) + 'px "Arial Black", Arial, sans-serif';
+      ctx.fillText('SELECT DIFFICULTY', W / 2, H * 0.245);
+
+      var diffs = ['EASY', 'MEDIUM', 'HARD'];
+      var btnW = Math.min(210, W * 0.26);
+      var btnH = Math.max(48, H * 0.075);
+      var gap = W * 0.03;
+      var totalW = diffs.length * btnW + (diffs.length - 1) * gap;
+      var startX = W / 2 - totalW / 2;
+      var y = H * 0.32;
+      game.diffButtons = [];
+
+      for (var i = 0; i < diffs.length; i++) {
+        var d = diffs[i];
+        var x = startX + i * (btnW + gap);
+        var selected = game.difficulty === d;
+        ctx.save();
+        setUIShadow(ctx);
+        ctx.fillStyle = selected ? '#dc2626' : '#ffffff';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 4;
+        roundRectPath(ctx, x, y, btnW, btnH, 10);
+        ctx.fill(); ctx.stroke();
+        ctx.restore();
+        ctx.fillStyle = selected ? '#ffffff' : '#111111';
+        ctx.font = '800 ' + Math.max(15, btnW * 0.15) + 'px Arial, sans-serif';
+        ctx.fillText(d, x + btnW / 2, y + btnH / 2);
+        game.diffButtons.push({ x: x, y: y, w: btnW, h: btnH, value: d });
+      }
+
+      var descs = {
+        EASY: 'Computer picks completely at random. Its stress stays calm no matter how you spam.',
+        MEDIUM: 'Computer reads your live click trail and drifts toward stress if you switch moves twice.',
+        HARD: 'Computer studies your trail closely — but an erratic spam pattern can overwhelm it into a random panic pick.'
+      };
+      ctx.fillStyle = '#555555';
+      ctx.font = '500 ' + Math.max(11, W * 0.014) + 'px Arial, sans-serif';
+      ctx.fillText(descs[game.difficulty], W / 2, y + btnH + H * 0.045);
+    } else {
+      game.diffButtons = [];
+      ctx.fillStyle = '#555555';
+      ctx.font = '500 ' + Math.max(12, W * 0.016) + 'px Arial, sans-serif';
+      ctx.fillText('Pass the device back and forth — each player gets their own', W / 2, H * 0.29);
+      ctx.fillText('private 3-second window to lock in a move.', W / 2, H * 0.29 + Math.max(16, W * 0.021));
+    }
 
     var eW = Math.min(300, W * 0.38);
     var eH = Math.max(60, H * 0.095);
@@ -1019,9 +1085,25 @@ GAME_HTML = """
   function drawConfusionPhase(t){
     var elapsed = clamp(t - game.confusionStart, 0, game.confusionDuration);
     var remaining = (game.confusionDuration - elapsed) / 1000;
+    var barW = Math.max(16, W * 0.028);
+    var barY = H * 0.46;
+    var barH = H * 0.27;
 
-    drawTrail(game.playerTrail, W * 0.06, H * 0.24, 'left');
-    drawTrail(game.aiTrail, W * 0.94, H * 0.24, 'right');
+    if (game.mode === 'local') {
+      var turnLabel = 'PLAYER ' + game.activePlayer;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#dc2626';
+      ctx.font = '900 ' + Math.max(13, W * 0.022) + 'px Arial, sans-serif';
+      ctx.fillText(turnLabel + "'S TURN", W / 2, H * 0.185);
+
+      drawTrail(game.playerTrail, W * 0.06, H * 0.26, 'left');
+      drawStressBar(W * 0.05, barY, barW, barH, game.playerStress, turnLabel, 'left');
+    } else {
+      drawTrail(game.playerTrail, W * 0.06, H * 0.24, 'left');
+      drawTrail(game.aiTrail, W * 0.94, H * 0.24, 'right');
+      drawStressBar(W * 0.05, barY, barW, barH, game.playerStress, 'YOU', 'left');
+      drawStressBar(W * 0.95 - barW, barY, barW, barH, game.aiStress, 'CPU', 'right');
+    }
 
     ctx.textAlign = 'center';
     ctx.fillStyle = remaining < 1 ? '#dc2626' : '#111111';
@@ -1030,15 +1112,25 @@ GAME_HTML = """
 
     ctx.fillStyle = '#555555';
     ctx.font = '700 ' + Math.max(11, W * 0.017) + 'px Arial, sans-serif';
-    ctx.fillText('SPAM YOUR MOVES — CONFUSE THE AI', W / 2, H * 0.395);
-
-    var barW = Math.max(16, W * 0.028);
-    var barY = H * 0.46;
-    var barH = H * 0.27;
-    drawStressBar(W * 0.05, barY, barW, barH, game.playerStress, 'YOU', 'left');
-    drawStressBar(W * 0.95 - barW, barY, barW, barH, game.aiStress, 'CPU', 'right');
+    ctx.fillText(
+      game.mode === 'local' ? 'SPAM YOUR MOVE — LOCK IT IN' : 'SPAM YOUR MOVES — CONFUSE THE AI',
+      W / 2, H * 0.395
+    );
 
     drawWeaponSlots(false);
+  }
+
+  function drawHandoffScreen(){
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#111111';
+    ctx.font = '900 ' + Math.max(20, W * 0.045) + 'px "Arial Black", Arial, sans-serif';
+    ctx.fillText('PASS THE DEVICE', W / 2, H * 0.42);
+    ctx.fillStyle = '#dc2626';
+    ctx.font = '900 ' + Math.max(18, W * 0.035) + 'px "Arial Black", Arial, sans-serif';
+    ctx.fillText('PLAYER ' + game.activePlayer + ', GET READY', W / 2, H * 0.50);
+    ctx.fillStyle = '#555555';
+    ctx.font = '600 ' + Math.max(12, W * 0.02) + 'px Arial, sans-serif';
+    ctx.fillText('TAP ANYWHERE TO REVEAL YOUR CONTROLS', W / 2, H * 0.58);
   }
 
   function drawClashAnimation(t){
@@ -1116,8 +1208,10 @@ GAME_HTML = """
 
     var playerFlashing = t < game.playerFlashUntil;
     var compFlashing = t < game.compFlashUntil;
-    drawHealthBar(W * 0.05, H * 0.14, W * 0.36, H * 0.055, game.playerHP, 3, 'YOU', 'left', playerFlashing, t);
-    drawHealthBar(W * 0.59, H * 0.14, W * 0.36, H * 0.055, game.compHP, 3, 'CPU', 'right', compFlashing, t);
+    var youLabel = game.mode === 'local' ? 'P1' : 'YOU';
+    var otherLabel = game.mode === 'local' ? 'P2' : 'CPU';
+    drawHealthBar(W * 0.05, H * 0.14, W * 0.36, H * 0.055, game.playerHP, 3, youLabel, 'left', playerFlashing, t);
+    drawHealthBar(W * 0.59, H * 0.14, W * 0.36, H * 0.055, game.compHP, 3, otherLabel, 'right', compFlashing, t);
 
     if (game.battlePhase === 'confusion') {
       drawConfusionPhase(t);
@@ -1126,6 +1220,8 @@ GAME_HTML = """
     } else if (game.battlePhase === 'result') {
       drawWeaponSlots(true);
       drawResultBanner();
+    } else if (game.battlePhase === 'handoff') {
+      drawHandoffScreen();
     }
 
     updateAndDrawParticles(frameDt);
@@ -1199,9 +1295,9 @@ GAME_HTML = """
     ctx.textAlign = 'center';
     ctx.fillStyle = '#111111';
     ctx.font = '900 ' + Math.max(24, W * 0.055) + 'px "Arial Black", Arial, sans-serif';
-    ctx.fillText('🔥 ARENA CONQUERED', W / 2, H * 0.40);
+    ctx.fillText(game.mode === 'local' ? '🔥 PLAYER 1 WINS' : '🔥 ARENA CONQUERED', W / 2, H * 0.40);
     ctx.font = '900 ' + Math.max(20, W * 0.045) + 'px "Arial Black", Arial, sans-serif';
-    ctx.fillText('VICTORY', W / 2, H * 0.50);
+    ctx.fillText(game.mode === 'local' ? 'GG' : 'VICTORY', W / 2, H * 0.50);
     drawRetryButton('PLAY AGAIN 🔥', '#111111');
   }
 
@@ -1211,9 +1307,9 @@ GAME_HTML = """
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffffff';
     ctx.font = '900 ' + Math.max(24, W * 0.055) + 'px "Arial Black", Arial, sans-serif';
-    ctx.fillText('🐋 ELIMINATED', W / 2, H * 0.38);
+    ctx.fillText(game.mode === 'local' ? '🔥 PLAYER 2 WINS' : '🐋 ELIMINATED', W / 2, H * 0.38);
     ctx.font = '900 ' + Math.max(20, W * 0.045) + 'px "Arial Black", Arial, sans-serif';
-    ctx.fillText('WASTED', W / 2, H * 0.48);
+    ctx.fillText(game.mode === 'local' ? 'GG' : 'WASTED', W / 2, H * 0.48);
     drawRetryButton('RE-ENTER COMBAT 🔄', '#ffffff');
   }
 
@@ -1253,7 +1349,7 @@ GAME_HTML = """
           game.lastTickIndex = tickIndex;
           sound('tick');
         }
-        if (elapsed < game.confusionDuration && t >= game.aiNextTick) {
+        if (game.mode === 'cpu' && elapsed < game.confusionDuration && t >= game.aiNextTick) {
           advanceAiTrail(t);
           var jitter = 190 + Math.random() * 230;
           if (game.difficulty === 'HARD') jitter *= 0.72;
@@ -1285,6 +1381,9 @@ GAME_HTML = """
           } else if (game.compHP <= 0) {
             stopBgMusic();
             game.state = 'victory';
+          } else if (game.mode === 'local') {
+            game.activePlayer = 1;
+            game.battlePhase = 'handoff';
           } else {
             startConfusionPhase();
           }
@@ -1345,6 +1444,13 @@ GAME_HTML = """
     }
 
     if (game.state === 'menu') {
+      for (var mi = 0; mi < game.modeButtons.length; mi++) {
+        if (hitButton(game.modeButtons[mi], x, y)) {
+          sound('snap');
+          game.mode = game.modeButtons[mi].value;
+          return;
+        }
+      }
       for (var i = 0; i < game.diffButtons.length; i++) {
         if (hitButton(game.diffButtons[i], x, y)) {
           sound('snap');
@@ -1383,6 +1489,12 @@ GAME_HTML = """
       if (hitButton(game.pauseButton, x, y)) {
         sound('snap');
         togglePause();
+        return;
+      }
+
+      if (game.battlePhase === 'handoff') {
+        sound('snap');
+        startConfusionPhase();
         return;
       }
 
